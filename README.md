@@ -5,10 +5,17 @@ A terminal application for managing issues on a GitHub Projects v2 board. It is 
 ## Requirements
 
 - Go 1.24 or newer
-- [GitHub CLI](https://cli.github.com/) installed and authenticated with `gh auth login`
+- A GitHub token supplied through `GH_TOKEN` or `GITHUB_TOKEN`, or the [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login`
 - Access to the project and permission to edit its issues and status field
 
-The app uses `gh auth token` to obtain a token at launch. It does not save the token. The token needs project read/write and repository issue access; run `gh auth refresh -s project -s repo` if GitHub reports an authorization error.
+To use a fine-grained personal access token, export it as `GH_TOKEN` (preferred) or `GITHUB_TOKEN` before starting the app:
+
+```sh
+export GH_TOKEN=github_pat_...
+go run .
+```
+
+The app uses `GH_TOKEN` first, then `GITHUB_TOKEN`, and falls back to `gh auth token` when neither is set. It does not save the token. Configure the token for the selected project owner and repositories, with access to read/write the project and read/write issues in its repositories. For a classic token via GitHub CLI, run `gh auth refresh -s project -s repo` if GitHub reports an authorization error.
 
 ## Run
 

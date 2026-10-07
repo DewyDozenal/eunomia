@@ -35,3 +35,23 @@ func TestParseProjectURL(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenFromEnv(t *testing.T) {
+	tests := []struct {
+		name        string
+		ghToken     string
+		githubToken string
+		want        string
+	}{
+		{name: "prefers GH_TOKEN", ghToken: " fine-grained ", githubToken: "other", want: "fine-grained"},
+		{name: "falls back to GITHUB_TOKEN", ghToken: " ", githubToken: " fallback ", want: "fallback"},
+		{name: "no token", want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := tokenFromEnv(test.ghToken, test.githubToken); got != test.want {
+				t.Fatalf("tokenFromEnv() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

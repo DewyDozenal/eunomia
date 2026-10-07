@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -48,18 +49,28 @@ type Client struct {
 }
 
 func NewClient() (*Client, error) {
-	output, err := exec.Command("gh", "auth", "token").Output()
-	if err != nil {
-		return nil, errors.New("GitHub CLI authentication not found; run `gh auth login` first")
-	}
-	token := strings.TrimSpace(string(output))
+	token := tokenFromEnv(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN"))
 	if token == "" {
-		return nil, errors.New("GitHub CLI returned an empty token; run `gh auth login`")
+		output, err := exec.Command("gh", "auth", "token").Output()
+		if err != nil {
+			return nil, errors.New("GitHub authentication not found; set GH_TOKEN or GITHUB_TOKEN, or run `gh auth login`")
+		}
+		token = strings.TrimSpace(string(output))
+		if token == "" {
+			return nil, errors.New("GitHub returned an empty token; set GH_TOKEN or GITHUB_TOKEN, or run `gh auth login`")
+		}
 	}
 	return &Client{
 		http:  &http.Client{Timeout: 30 * time.Second},
 		token: token,
 	}, nil
+}
+
+func tokenFromEnv(ghToken, githubToken string) string {
+	if token := strings.TrimSpace(ghToken); token != "" {
+		return token
+	}
+	return strings.TrimSpace(githubToken)
 }
 
 type Project struct {
