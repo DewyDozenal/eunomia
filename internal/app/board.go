@@ -85,15 +85,17 @@ func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		stage := m.project.Stages[target]
-		m.column, m.issue = target, 0
 		if stage.Name == m.dragIssue.Stage {
 			return m, nil
 		}
 		client, projectID, fieldID, issue := m.client, m.project.ID, m.project.StatusFieldID, m.dragIssue
-		m.screen, m.errorText = loadingScreen, ""
-		return m, func() tea.Msg {
-			return actionMessage{err: client.MoveIssue(projectID, fieldID, issue, stage), failureScreen: boardScreen}
-		}
+		m.errorText = ""
+		return m, m.startSpinner(func() tea.Msg {
+			return actionMessage{
+				err:    client.MoveIssue(projectID, fieldID, issue, stage),
+				column: target, selectColumn: true,
+			}
+		})
 	}
 	return m, nil
 }
@@ -139,9 +141,7 @@ func (m model) boardView() string {
 		return headerStyle.Render("GitHub Projects") + "\n\n" + mutedStyle.Render("This project has no status columns.")
 	}
 	var out strings.Builder
-	out.WriteString(headerStyle.Render("GitHub Projects"))
-	out.WriteString("  ")
-	out.WriteString(titleStyle.Render(m.project.Title))
+	out.WriteString(m.header(headerStyle.Render("GitHub Projects") + "  " + titleStyle.Render(m.project.Title)))
 	out.WriteString("\n")
 	out.WriteString(mutedStyle.Render(m.projectURL))
 	out.WriteString("\n")
@@ -159,10 +159,14 @@ func (m model) boardView() string {
 		stage := m.project.Stages[visibleIndex]
 		label := fmt.Sprintf("%s (%d)", stage.Name, len(m.issuesInColumn(visibleIndex)))
 		background := "238"
+		selectedColumn := visibleIndex == m.column
+		if selectedColumn {
+			background = "99"
+		}
 		if m.dragging && m.dragTarget == visibleIndex {
 			background = "62"
 		}
-		out.WriteString(renderCell(label, layout.columnWidth, background, "255", true))
+		out.WriteString(renderCell(label, layout.columnWidth, background, "255", selectedColumn))
 	}
 	for row := 0; row < layout.visibleRows; row++ {
 		issuesByColumn := make([][]github.Issue, layout.end-layout.start)
@@ -219,11 +223,19 @@ func (m model) boardView() string {
 }
 
 func renderCell(text string, width int, background, foreground string, bold bool) string {
-	style := lipgloss.NewStyle().Width(width).Background(lipgloss.Color(background)).Foreground(lipgloss.Color(foreground))
-	if bold {
-		style = style.Bold(true)
-	}
+	style := cardTextStyle(bold, background, foreground).Width(width)
 	return style.Render(truncate(text, width))
+}
+
+func cardTextStyle(selected bool, background, foreground string) lipgloss.Style {
+	if selected {
+		foreground = "183"
+	}
+	style := lipgloss.NewStyle().Background(lipgloss.Color(background)).Foreground(lipgloss.Color(foreground))
+	if selected {
+		return style.Bold(true)
+	}
+	return style
 }
 
 func (m model) issuesInColumn(index int) []github.Issue {

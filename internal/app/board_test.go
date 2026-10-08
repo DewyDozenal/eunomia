@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/blake/gh-project-tui/internal/github"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -85,6 +86,31 @@ func TestBoardViewShowsIssueCardFields(t *testing.T) {
 	}
 }
 
+func TestSelectedCardUsesDistinctTextColor(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		style := cardTextStyle(selected, "236", "255")
+		foreground, ok := style.GetForeground().(lipgloss.Color)
+		if !ok {
+			t.Fatalf("GetForeground() = %T, want lipgloss.Color", style.GetForeground())
+		}
+		if selected && foreground != lipgloss.Color("183") {
+			t.Errorf("selected card foreground = %q, want highlight color", foreground)
+		}
+		if !selected && foreground != lipgloss.Color("255") {
+			t.Errorf("unselected card foreground = %q, want default color", foreground)
+		}
+	}
+}
+
+func TestSelectedColumnTitleIsBold(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		style := cardTextStyle(selected, "238", "255")
+		if got := style.GetBold(); got != selected {
+			t.Errorf("column bold = %v when selected=%v", got, selected)
+		}
+	}
+}
+
 func TestDraggingIssueSelectsDropColumn(t *testing.T) {
 	m := model{
 		screen: boardScreen, width: 80, height: 24,
@@ -115,8 +141,39 @@ func TestDraggingIssueSelectsDropColumn(t *testing.T) {
 		X: layout.columnWidth + columnGap + 2, Y: boardHeaderY, Action: tea.MouseActionRelease,
 	})
 	result := dropped.(model)
-	if cmd == nil || result.screen != loadingScreen || result.column != 1 || result.dragging {
-		t.Fatalf("release did not submit the move: screen=%v column=%d dragging=%v cmd=%v",
-			result.screen, result.column, result.dragging, cmd != nil)
+	if cmd == nil || result.screen != boardScreen || result.column != 0 || result.dragging || !result.busy {
+		t.Fatalf("release did not submit the move: screen=%v column=%d dragging=%v busy=%v cmd=%v",
+			result.screen, result.column, result.dragging, result.busy, cmd != nil)
+	}
+}
+
+func TestBoardShowsSpinnerWithoutReplacingScreen(t *testing.T) {
+	m := model{
+		screen: boardScreen, width: 80, height: 24, busy: true,
+		spinner: spinner.New(),
+		project: &github.Project{
+			Title:  "Roadmap",
+			Stages: []github.Stage{{Name: "Todo"}},
+		},
+	}
+	view := m.View()
+	if !strings.Contains(view, m.spinner.View()) {
+		t.Fatal("busy board does not show the spinner")
+	}
+	if strings.Contains(view, "Connecting to GitHub") {
+		t.Fatal("busy board was replaced with the old loading screen")
+	}
+	if m.screen != boardScreen {
+		t.Fatalf("screen changed while operation was in progress: %v", m.screen)
+	}
+}
+
+func TestActionResultKeepsCurrentScreenUntilRefreshCompletes(t *testing.T) {
+	m := model{screen: commentScreen, busy: true}
+	updated, cmd := m.Update(actionMessage{})
+	result := updated.(model)
+	if result.screen != commentScreen || !result.busy || cmd == nil {
+		t.Fatalf("action result changed screen or stopped spinner before refresh: screen=%v busy=%v cmd=%v",
+			result.screen, result.busy, cmd != nil)
 	}
 }

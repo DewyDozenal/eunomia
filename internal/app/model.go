@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/blake/gh-project-tui/internal/github"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,7 +15,6 @@ type screen int
 
 const (
 	setupScreen screen = iota
-	loadingScreen
 	boardScreen
 	detailScreen
 	editScreen
@@ -30,8 +30,9 @@ type loadMessage struct {
 }
 
 type actionMessage struct {
-	err           error
-	failureScreen screen
+	err          error
+	column       int
+	selectColumn bool
 }
 
 type model struct {
@@ -43,6 +44,8 @@ type model struct {
 	titleInput   textinput.Model
 	bodyInput    textarea.Model
 	commentInput textarea.Model
+	spinner      spinner.Model
+	busy         bool
 	editIssue    github.Issue
 	returnScreen screen
 	column       int
@@ -81,7 +84,9 @@ func New() tea.Model {
 
 	m := model{
 		screen: setupScreen, urlInput: urlInput, titleInput: titleInput,
-		bodyInput: bodyInput, commentInput: commentInput, dragTarget: -1,
+		bodyInput: bodyInput, commentInput: commentInput,
+		spinner:    spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(spinnerStyle)),
+		dragTarget: -1,
 	}
 	cfg, err := loadConfig()
 	if err != nil {
@@ -91,15 +96,15 @@ func New() tea.Model {
 	if cfg.ProjectURL != "" {
 		m.projectURL = cfg.ProjectURL
 		m.urlInput.SetValue(cfg.ProjectURL)
-		m.screen = loadingScreen
+		m.busy = true
 		return m
 	}
 	return m
 }
 
 func (m model) Init() tea.Cmd {
-	if m.screen == loadingScreen {
-		return m.loadProject(m.projectURL, nil)
+	if m.busy {
+		return tea.Batch(m.loadProject(m.projectURL, nil), m.spinner.Tick)
 	}
 	return textinput.Blink
 }
@@ -127,8 +132,20 @@ func (m model) reload() tea.Cmd {
 	return m.loadProject(m.projectURL, m.client)
 }
 
+func (m *model) startSpinner(cmd tea.Cmd) tea.Cmd {
+	m.busy = true
+	return tea.Batch(cmd, m.spinner.Tick)
+}
+
 func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
+	case spinner.TickMsg:
+		if m.busy {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.bodyInput.SetWidth(max(30, min(90, msg.Width-12)))
@@ -137,13 +154,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.commentInput.SetHeight(max(5, msg.Height-13))
 		return m, nil
 	case loadMessage:
+		m.busy = false
 		if msg.err != nil {
 			m.errorText = msg.err.Error()
-			if m.project != nil {
-				m.screen = boardScreen
-			} else {
-				m.screen = setupScreen
-			}
 			return m, nil
 		}
 		m.client, m.project, m.projectURL = msg.client, msg.project, msg.url
@@ -156,25 +169,25 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case actionMessage:
 		if msg.err != nil {
+			m.busy = false
 			m.errorText = msg.err.Error()
-			if m.screen == loadingScreen {
-				m.screen = msg.failureScreen
-				if m.screen == loadingScreen {
-					m.screen = boardScreen
-				}
-			}
 			return m, nil
 		}
+		if msg.selectColumn {
+			m.column, m.issue = msg.column, 0
+		}
 		m.errorText = ""
-		m.screen = loadingScreen
 		return m, m.reload()
 	case tea.MouseMsg:
-		if m.screen == boardScreen {
+		if m.screen == boardScreen && !m.busy {
 			return m.updateMouse(msg)
 		}
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if m.busy {
+			return m, nil
 		}
 		return m.updateKey(msg)
 	}
@@ -196,8 +209,8 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.errorText = "Enter a GitHub Projects v2 URL."
 				return m, nil
 			}
-			m.errorText, m.screen = "", loadingScreen
-			return m, m.loadProject(raw, nil)
+			m.errorText = ""
+			return m, m.startSpinner(m.loadProject(raw, nil))
 		case "q":
 			if m.project == nil {
 				return m, tea.Quit
@@ -207,24 +220,14 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.urlInput, cmd = m.urlInput.Update(msg)
 		return m, cmd
 
-	case loadingScreen:
-		if msg.String() == "q" || msg.String() == "esc" {
-			if m.project != nil {
-				m.screen = boardScreen
-				m.errorText = ""
-				return m, nil
-			}
-		}
-		return m, nil
-
 	case boardScreen:
 		m.dragging, m.dragTarget = false, -1
 		switch msg.String() {
 		case "q":
 			return m, tea.Quit
 		case "r":
-			m.screen, m.errorText = loadingScreen, ""
-			return m, m.reload()
+			m.errorText = ""
+			return m, m.startSpinner(m.reload())
 		case "c":
 			m.urlInput.SetValue(m.projectURL)
 			m.urlInput.CursorEnd()
@@ -316,10 +319,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			issue := m.editIssue
 			body := m.bodyInput.Value()
 			client := m.client
-			m.screen, m.errorText = loadingScreen, ""
-			return m, func() tea.Msg {
-				return actionMessage{err: client.EditIssue(issue, title, body), failureScreen: editScreen}
-			}
+			m.errorText = ""
+			return m, m.startSpinner(func() tea.Msg {
+				return actionMessage{err: client.EditIssue(issue, title, body)}
+			})
 		case "tab":
 			if m.titleInput.Focused() {
 				m.titleInput.Blur()
@@ -354,14 +357,14 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.moveTo >= 0 && m.moveTo < len(m.project.Stages) {
 				client, projectID, issue, stage := m.client, m.project.ID, m.editIssue, m.project.Stages[m.moveTo]
-				failureScreen := m.returnScreen
-				m.screen, m.errorText = loadingScreen, ""
-				return m, func() tea.Msg {
+				fieldID := m.project.StatusFieldID
+				m.errorText = ""
+				return m, m.startSpinner(func() tea.Msg {
 					return actionMessage{
-						err:           client.MoveIssue(projectID, m.project.StatusFieldID, issue, stage),
-						failureScreen: failureScreen,
+						err:    client.MoveIssue(projectID, fieldID, issue, stage),
+						column: m.moveTo, selectColumn: true,
 					}
-				}
+				})
 			}
 		}
 		return m, nil
@@ -378,10 +381,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			client, issue := m.client, m.editIssue
-			m.screen, m.errorText = loadingScreen, ""
-			return m, func() tea.Msg {
-				return actionMessage{err: client.AddComment(issue, body), failureScreen: commentScreen}
-			}
+			m.errorText = ""
+			return m, m.startSpinner(func() tea.Msg {
+				return actionMessage{err: client.AddComment(issue, body)}
+			})
 		}
 		var cmd tea.Cmd
 		m.commentInput, cmd = m.commentInput.Update(msg)
@@ -430,8 +433,6 @@ func (m model) View() string {
 	switch m.screen {
 	case setupScreen:
 		return m.setupView()
-	case loadingScreen:
-		return headerStyle.Render("GitHub Projects") + "\n\n" + mutedStyle.Render("Connecting to GitHub…")
 	case boardScreen:
 		return m.boardView()
 	case detailScreen:

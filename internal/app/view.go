@@ -12,15 +12,31 @@ var (
 	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
 	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	spinnerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	selectedStyle = lipgloss.NewStyle().
 			Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
 )
 
+func (m model) header(left string) string {
+	if !m.busy {
+		return left
+	}
+	width := m.width
+	if width < 1 {
+		width = 80
+	}
+	right := m.spinner.View()
+	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
+	return left + strings.Repeat(" ", gap) + right
+}
+
 func (m model) setupView() string {
 	var out strings.Builder
-	out.WriteString(headerStyle.Render("GitHub Projects"))
+	out.WriteString(m.header(headerStyle.Render("GitHub Projects")))
 	out.WriteString("\n\n")
-	if m.project == nil {
+	if m.busy {
+		out.WriteString("Connecting to project…")
+	} else if m.project == nil {
 		out.WriteString("Connect to a GitHub Projects v2 board.\n")
 		out.WriteString(mutedStyle.Render("Authenticate first with `gh auth login`."))
 	} else {
@@ -40,13 +56,17 @@ func (m model) setupView() string {
 func (m model) detailView() string {
 	issue := m.editIssue
 	var out strings.Builder
-	out.WriteString(headerStyle.Render(fmt.Sprintf("%s  #%d", issue.Repo, issue.Number)))
+	out.WriteString(m.header(headerStyle.Render(fmt.Sprintf("%s  #%d", issue.Repo, issue.Number))))
 	out.WriteString("\n\n")
 	out.WriteString(titleStyle.Render(issue.Title))
 	out.WriteString("\n")
 	out.WriteString(mutedStyle.Render(fmt.Sprintf("%s · %s · %s", issue.State, issue.Stage, strings.Join(issue.Labels, ", "))))
 	out.WriteString("\n")
 	out.WriteString(mutedStyle.Render(issue.URL))
+	if m.errorText != "" {
+		out.WriteString("\n")
+		out.WriteString(errorStyle.Render(m.errorText))
+	}
 	out.WriteString("\n\n")
 	body := strings.TrimSpace(issue.Body)
 	if body == "" {
@@ -63,7 +83,7 @@ func (m model) detailView() string {
 
 func (m model) editView() string {
 	var out strings.Builder
-	out.WriteString(headerStyle.Render(fmt.Sprintf("Edit issue #%d", m.editIssue.Number)))
+	out.WriteString(m.header(headerStyle.Render(fmt.Sprintf("Edit issue #%d", m.editIssue.Number))))
 	out.WriteString("\n\nTitle\n")
 	out.WriteString(m.titleInput.View())
 	out.WriteString("\n\nDescription\n")
@@ -79,7 +99,7 @@ func (m model) editView() string {
 
 func (m model) commentView() string {
 	var out strings.Builder
-	out.WriteString(headerStyle.Render(fmt.Sprintf("Add comment to #%d", m.editIssue.Number)))
+	out.WriteString(m.header(headerStyle.Render(fmt.Sprintf("Add comment to #%d", m.editIssue.Number))))
 	out.WriteString("\n")
 	out.WriteString(titleStyle.Render(m.editIssue.Title))
 	out.WriteString("\n\n")
@@ -95,8 +115,12 @@ func (m model) commentView() string {
 
 func (m model) moveView() string {
 	var out strings.Builder
-	out.WriteString(headerStyle.Render(fmt.Sprintf("Move issue #%d", m.editIssue.Number)))
+	out.WriteString(m.header(headerStyle.Render(fmt.Sprintf("Move issue #%d", m.editIssue.Number))))
 	out.WriteString("\n\n")
+	if m.errorText != "" {
+		out.WriteString(errorStyle.Render(m.errorText))
+		out.WriteString("\n\n")
+	}
 	for i, stage := range m.project.Stages {
 		line := stage.Name
 		if i == m.moveTo {
