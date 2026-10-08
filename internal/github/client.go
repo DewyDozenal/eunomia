@@ -18,9 +18,17 @@ import (
 const graphQLEndpoint = "https://api.github.com/graphql"
 
 type ProjectRef struct {
-	Owner  string
-	Number int
+	Owner     string
+	OwnerType OwnerType
+	Number    int
 }
+
+type OwnerType string
+
+const (
+	OrganizationOwner OwnerType = "organization"
+	UserOwner         OwnerType = "user"
+)
 
 func ParseProjectURL(raw string) (ProjectRef, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
@@ -31,7 +39,11 @@ func ParseProjectURL(raw string) (ProjectRef, error) {
 	if len(parts) == 4 && (parts[0] == "orgs" || parts[0] == "users") && parts[2] == "projects" {
 		number, err := strconv.Atoi(parts[3])
 		if err == nil && number > 0 {
-			return ProjectRef{Owner: parts[1], Number: number}, nil
+			ownerType := OrganizationOwner
+			if parts[0] == "users" {
+				ownerType = UserOwner
+			}
+			return ProjectRef{Owner: parts[1], OwnerType: ownerType, Number: number}, nil
 		}
 	}
 	if len(parts) == 3 && parts[1] == "projects" {
@@ -44,8 +56,9 @@ func ParseProjectURL(raw string) (ProjectRef, error) {
 }
 
 type Client struct {
-	http  *http.Client
-	token string
+	http     *http.Client
+	token    string
+	endpoint string
 }
 
 func NewClient() (*Client, error) {
@@ -61,8 +74,9 @@ func NewClient() (*Client, error) {
 		}
 	}
 	return &Client{
-		http:  &http.Client{Timeout: 30 * time.Second},
-		token: token,
+		http:     &http.Client{Timeout: 30 * time.Second},
+		token:    token,
+		endpoint: graphQLEndpoint,
 	}, nil
 }
 
@@ -100,71 +114,33 @@ type Issue struct {
 	Stage     string
 }
 
-const projectQuery = `
-query($owner: String!, $number: Int!, $cursor: String) {
-  organization(login: $owner) {
-    projectV2(number: $number) {
-      id title
-      fields(first: 100) {
-        nodes {
-          ... on ProjectV2SingleSelectField {
-            id name options { id name }
-          }
-        }
-      }
-      items(first: 100, after: $cursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes {
-          id
-          content {
-            __typename
-            ... on Issue {
-              id title body url number state
-              repository { nameWithOwner }
-              labels(first: 30) { nodes { name } }
-              assignees(first: 10) { nodes { login } }
-            }
-          }
-          fieldValues(first: 50) {
-            nodes {
-              ... on ProjectV2ItemFieldSingleSelectValue {
-                name optionId field { ... on ProjectV2SingleSelectField { id name } }
-              }
-            }
-          }
-        }
+const projectFieldsFragment = `
+fragment ProjectFields on ProjectV2 {
+  id title
+  fields(first: 100) {
+    nodes {
+      ... on ProjectV2SingleSelectField {
+        id name options { id name }
       }
     }
   }
-  user(login: $owner) {
-    projectV2(number: $number) {
-      id title
-      fields(first: 100) {
-        nodes {
-          ... on ProjectV2SingleSelectField {
-            id name options { id name }
-          }
+  items(first: 100, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id
+      content {
+        __typename
+        ... on Issue {
+          id title body url number state
+          repository { nameWithOwner }
+          labels(first: 30) { nodes { name } }
+          assignees(first: 10) { nodes { login } }
         }
       }
-      items(first: 100, after: $cursor) {
-        pageInfo { hasNextPage endCursor }
+      fieldValues(first: 50) {
         nodes {
-          id
-          content {
-            __typename
-            ... on Issue {
-              id title body url number state
-              repository { nameWithOwner }
-              labels(first: 30) { nodes { name } }
-              assignees(first: 10) { nodes { login } }
-            }
-          }
-          fieldValues(first: 50) {
-            nodes {
-              ... on ProjectV2ItemFieldSingleSelectValue {
-                name optionId field { ... on ProjectV2SingleSelectField { id name } }
-              }
-            }
+          ... on ProjectV2ItemFieldSingleSelectValue {
+            name optionId field { ... on ProjectV2SingleSelectField { id name } }
           }
         }
       }
@@ -172,11 +148,23 @@ query($owner: String!, $number: Int!, $cursor: String) {
   }
 }`
 
+const organizationProjectQuery = `
+query($owner: String!, $number: Int!, $cursor: String) {
+  organization(login: $owner) {
+    projectV2(number: $number) { ...ProjectFields }
+  }
+}` + projectFieldsFragment
+
+const userProjectQuery = `
+query($owner: String!, $number: Int!, $cursor: String) {
+  user(login: $owner) {
+    projectV2(number: $number) { ...ProjectFields }
+  }
+}` + projectFieldsFragment
+
 type projectResponse struct {
-	Data struct {
-		Organization *projectData `json:"organization"`
-		User         *projectData `json:"user"`
-	} `json:"data"`
+	Organization *projectData `json:"organization"`
+	User         *projectData `json:"user"`
 }
 
 type projectData struct {
@@ -238,19 +226,41 @@ type projectData struct {
 }
 
 func (c *Client) Load(ref ProjectRef) (*Project, error) {
+	ownerTypes := []OwnerType{ref.OwnerType}
+	if ref.OwnerType == "" {
+		ownerTypes = []OwnerType{OrganizationOwner, UserOwner}
+	}
+	var lastErr error
+	for _, ownerType := range ownerTypes {
+		project, err := c.loadProject(ref, ownerType)
+		if err == nil {
+			return project, nil
+		}
+		if lastErr == nil {
+			lastErr = err
+		}
+	}
+	return nil, lastErr
+}
+
+func (c *Client) loadProject(ref ProjectRef, ownerType OwnerType) (*Project, error) {
 	var result *Project
 	var cursor any
 	for {
 		var response projectResponse
 		variables := map[string]any{"owner": ref.Owner, "number": ref.Number, "cursor": cursor}
-		if err := c.graphQL(projectQuery, variables, &response); err != nil {
+		query := organizationProjectQuery
+		if ownerType == UserOwner {
+			query = userProjectQuery
+		}
+		if err := c.graphQL(query, variables, &response); err != nil {
 			return nil, err
 		}
 		var data *projectData
-		if response.Data.Organization != nil {
-			data = response.Data.Organization
-		} else if response.Data.User != nil {
-			data = response.Data.User
+		if ownerType == OrganizationOwner && response.Organization != nil {
+			data = response.Organization
+		} else if ownerType == UserOwner && response.User != nil {
+			data = response.User
 		}
 		if data == nil || data.Project == nil {
 			return nil, fmt.Errorf("project not found or inaccessible: check the URL and your GitHub permissions")
@@ -359,7 +369,11 @@ func (c *Client) graphQL(query string, variables map[string]any, target any) err
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequest(http.MethodPost, graphQLEndpoint, bytes.NewReader(payload))
+	endpoint := c.endpoint
+	if endpoint == "" {
+		endpoint = graphQLEndpoint
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
