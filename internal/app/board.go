@@ -92,7 +92,7 @@ func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		client, projectID, fieldID, issue := m.client, m.project.ID, m.project.StatusFieldID, m.dragIssue
 		m.screen, m.errorText = loadingScreen, ""
 		return m, func() tea.Msg {
-			return actionMessage{err: client.MoveIssue(projectID, fieldID, issue, stage)}
+			return actionMessage{err: client.MoveIssue(projectID, fieldID, issue, stage), failureScreen: boardScreen}
 		}
 	}
 	return m, nil
@@ -212,7 +212,7 @@ func (m model) boardView() string {
 		}
 	}
 	out.WriteString("\n\n")
-	out.WriteString(mutedStyle.Render("←/→ column  ↑/↓ issue  enter view  e edit  m move  r refresh  c change project  q quit"))
+	out.WriteString(mutedStyle.Render("←/→ column  ↑/↓ issue  enter view  e edit  a comment  m move  r refresh  c change project  q quit"))
 	out.WriteString("\n")
 	out.WriteString(mutedStyle.Render("Mouse: drag an issue card onto another status column to move it."))
 	return out.String()

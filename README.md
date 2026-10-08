@@ -56,11 +56,12 @@ The project must have a single-select field named **Status**. The selected URL i
 | `↑` / `↓` or `k` / `j` | Select an issue |
 | `Enter` | View issue details |
 | `e` | Edit the issue title and description |
+| `a` | Add a comment to the selected issue |
 | `m` | Move the issue to a status |
 | `r` | Refresh the board |
 | `c` | Connect to a different project |
 | `q` | Quit |
 
-In the issue editor, use `Tab` to switch between title and description, `Ctrl+S` to save, and `Esc` to cancel. Issues without a status are grouped under **No status**.
+In the issue editor, use `Tab` to switch between title and description, `Ctrl+S` to save, and `Esc` to cancel. Press `a` while an issue is selected or open to compose a comment; `Ctrl+S` posts it and `Esc` cancels. Issues without a status are grouped under **No status**.
 
 The board renders issue cards with alternating gray backgrounds and shows each issue number, title, and assignees. With mouse support enabled in the terminal, drag a card and release it over another status column to change its status.

@@ -57,7 +57,7 @@ func (m model) detailView() string {
 	}
 	out.WriteString(body)
 	out.WriteString("\n\n")
-	out.WriteString(mutedStyle.Render("e edit  m move stage  esc back  q quit"))
+	out.WriteString(mutedStyle.Render("e edit  a add comment  m move stage  esc back  q quit"))
 	return out.String()
 }
 
@@ -74,6 +74,22 @@ func (m model) editView() string {
 	}
 	out.WriteString("\n\n")
 	out.WriteString(mutedStyle.Render("tab switch field  ctrl+s save  esc cancel"))
+	return out.String()
+}
+
+func (m model) commentView() string {
+	var out strings.Builder
+	out.WriteString(headerStyle.Render(fmt.Sprintf("Add comment to #%d", m.editIssue.Number)))
+	out.WriteString("\n")
+	out.WriteString(titleStyle.Render(m.editIssue.Title))
+	out.WriteString("\n\n")
+	out.WriteString(m.commentInput.View())
+	if m.errorText != "" {
+		out.WriteString("\n")
+		out.WriteString(errorStyle.Render(m.errorText))
+	}
+	out.WriteString("\n\n")
+	out.WriteString(mutedStyle.Render("ctrl+s post comment  esc cancel"))
 	return out.String()
 }
 

@@ -19,6 +19,7 @@ const (
 	detailScreen
 	editScreen
 	moveScreen
+	commentScreen
 )
 
 type loadMessage struct {
@@ -29,7 +30,8 @@ type loadMessage struct {
 }
 
 type actionMessage struct {
-	err error
+	err           error
+	failureScreen screen
 }
 
 type model struct {
@@ -40,6 +42,7 @@ type model struct {
 	urlInput     textinput.Model
 	titleInput   textinput.Model
 	bodyInput    textarea.Model
+	commentInput textarea.Model
 	editIssue    github.Issue
 	returnScreen screen
 	column       int
@@ -70,7 +73,16 @@ func New() tea.Model {
 	bodyInput.SetHeight(10)
 	bodyInput.ShowLineNumbers = false
 
-	m := model{screen: setupScreen, urlInput: urlInput, titleInput: titleInput, bodyInput: bodyInput, dragTarget: -1}
+	commentInput := textarea.New()
+	commentInput.Placeholder = "Write a comment…"
+	commentInput.SetWidth(72)
+	commentInput.SetHeight(8)
+	commentInput.ShowLineNumbers = false
+
+	m := model{
+		screen: setupScreen, urlInput: urlInput, titleInput: titleInput,
+		bodyInput: bodyInput, commentInput: commentInput, dragTarget: -1,
+	}
 	cfg, err := loadConfig()
 	if err != nil {
 		m.errorText = "Could not read saved settings: " + err.Error()
@@ -121,6 +133,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.bodyInput.SetWidth(max(30, min(90, msg.Width-12)))
 		m.bodyInput.SetHeight(max(5, msg.Height-15))
+		m.commentInput.SetWidth(max(30, min(90, msg.Width-12)))
+		m.commentInput.SetHeight(max(5, msg.Height-13))
 		return m, nil
 	case loadMessage:
 		if msg.err != nil {
@@ -144,7 +158,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.errorText = msg.err.Error()
 			if m.screen == loadingScreen {
-				m.screen = boardScreen
+				m.screen = msg.failureScreen
+				if m.screen == loadingScreen {
+					m.screen = boardScreen
+				}
 			}
 			return m, nil
 		}
@@ -241,6 +258,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if issue, ok := m.selectedIssue(); ok {
 				m.beginEdit(issue)
 			}
+		case "a":
+			if issue, ok := m.selectedIssue(); ok {
+				m.beginComment(issue)
+			}
 		case "m":
 			if issue, ok := m.selectedIssue(); ok && len(m.project.Stages) > 0 {
 				m.editIssue = issue
@@ -264,6 +285,8 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "e":
 			m.returnScreen = detailScreen
 			m.beginEdit(m.editIssue)
+		case "a":
+			m.beginComment(m.editIssue)
 		case "m":
 			m.returnScreen = detailScreen
 			m.moveTo = 0
@@ -292,9 +315,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			issue := m.editIssue
 			body := m.bodyInput.Value()
+			client := m.client
 			m.screen, m.errorText = loadingScreen, ""
 			return m, func() tea.Msg {
-				return actionMessage{err: m.client.EditIssue(issue, title, body)}
+				return actionMessage{err: client.EditIssue(issue, title, body), failureScreen: editScreen}
 			}
 		case "tab":
 			if m.titleInput.Focused() {
@@ -330,13 +354,38 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.moveTo >= 0 && m.moveTo < len(m.project.Stages) {
 				client, projectID, issue, stage := m.client, m.project.ID, m.editIssue, m.project.Stages[m.moveTo]
+				failureScreen := m.returnScreen
 				m.screen, m.errorText = loadingScreen, ""
 				return m, func() tea.Msg {
-					return actionMessage{err: client.MoveIssue(projectID, m.project.StatusFieldID, issue, stage)}
+					return actionMessage{
+						err:           client.MoveIssue(projectID, m.project.StatusFieldID, issue, stage),
+						failureScreen: failureScreen,
+					}
 				}
 			}
 		}
 		return m, nil
+
+	case commentScreen:
+		switch msg.String() {
+		case "esc":
+			m.screen = m.returnScreen
+			return m, nil
+		case "ctrl+s":
+			body := strings.TrimSpace(m.commentInput.Value())
+			if body == "" {
+				m.errorText = "Comment cannot be empty."
+				return m, nil
+			}
+			client, issue := m.client, m.editIssue
+			m.screen, m.errorText = loadingScreen, ""
+			return m, func() tea.Msg {
+				return actionMessage{err: client.AddComment(issue, body), failureScreen: commentScreen}
+			}
+		}
+		var cmd tea.Cmd
+		m.commentInput, cmd = m.commentInput.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -352,6 +401,15 @@ func (m *model) beginEdit(issue github.Issue) {
 	m.bodyInput.Blur()
 	m.errorText = ""
 	m.screen = editScreen
+}
+
+func (m *model) beginComment(issue github.Issue) {
+	m.returnScreen = m.screen
+	m.editIssue = issue
+	m.commentInput.Reset()
+	m.commentInput.Focus()
+	m.errorText = ""
+	m.screen = commentScreen
 }
 
 func clampSelection(column, issue int, project *github.Project) (int, int) {
@@ -382,6 +440,8 @@ func (m model) View() string {
 		return m.editView()
 	case moveScreen:
 		return m.moveView()
+	case commentScreen:
+		return m.commentView()
 	default:
 		return fmt.Sprint("Unknown screen")
 	}

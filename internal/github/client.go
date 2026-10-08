@@ -364,6 +364,17 @@ func (c *Client) EditIssue(issue Issue, title, body string) error {
 	}, nil)
 }
 
+func (c *Client) AddComment(issue Issue, body string) error {
+	const mutation = `mutation($id: ID!, $body: String!) {
+		addComment(input: {subjectId: $id, body: $body}) {
+			commentEdge { node { id } }
+		}
+	}`
+	return c.graphQL(mutation, map[string]any{
+		"id": issue.ID, "body": body,
+	}, nil)
+}
+
 func (c *Client) graphQL(query string, variables map[string]any, target any) error {
 	payload, err := json.Marshal(map[string]any{"query": query, "variables": variables})
 	if err != nil {

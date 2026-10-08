@@ -131,6 +131,34 @@ func TestLoadRetriesUserLookupForAmbiguousOwnerURL(t *testing.T) {
 	}
 }
 
+func TestAddCommentPostsIssueComment(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Query     string `json:"query"`
+			Variables struct {
+				ID   string `json:"id"`
+				Body string `json:"body"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode GraphQL request: %v", err)
+		}
+		if !strings.Contains(request.Query, "addComment(input:") {
+			t.Errorf("query does not add a comment: %s", request.Query)
+		}
+		if request.Variables.ID != "issue-id" || request.Variables.Body != "Looks good!" {
+			t.Errorf("comment variables = %+v, want issue ID and comment body", request.Variables)
+		}
+		_, _ = w.Write([]byte(`{"data":{"addComment":{"commentEdge":{"node":{"id":"comment-id"}}}}}`))
+	}))
+	defer server.Close()
+
+	client := &Client{http: server.Client(), token: "test-token", endpoint: server.URL}
+	if err := client.AddComment(Issue{ID: "issue-id"}, "Looks good!"); err != nil {
+		t.Fatalf("AddComment() error = %v", err)
+	}
+}
+
 func projectResponseJSON(ownerType string) string {
 	return `{"data":{"` + ownerType + `":{"projectV2":{"id":"project-id","title":"Test project","fields":{"nodes":[{"id":"status-id","name":"Status","options":[{"id":"todo-id","name":"Todo"}]}]},"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}`
 }
